@@ -21,6 +21,7 @@ class SECP256k1:
     order = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141L
     a = 0x0000000000000000000000000000000000000000000000000000000000000000L
     b = 0x0000000000000000000000000000000000000000000000000000000000000007L
+    h = 1
     Gx = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798L
     Gy = 0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8L
     curve = ecdsa.ellipticcurve.CurveFp(p, a, b)
@@ -244,6 +245,61 @@ def signature_to_public_key(signature, message):
         return None
     return encode_point(Q, compressed)
 
+def verify(signature, message, address):
+    public_key = signature_to_public_key(signature, message)
+    if not public_key:
+        return False
+
+    if public_key_to_address(public_key) == address:
+        return True
+    else:
+        return False
+
+def sign(private_key, message):
+    curve = SECP256k1.curve
+    G = SECP256k1.G
+    order = SECP256k1.order
+
+    secret, compressed = private_key_to_secret_check_compressed(private_key)
+    if secret == None:
+        return None
+
+    h = double_sha256(format_message_for_signing(message))
+    signing_key = ecdsa.SigningKey.from_secret_exponent(secret, curve=SECP256k1.ecdsa_curve)
+    ecdsa_signature = signing_key.sign_digest(h, sigencode=ecdsa.util.sigencode_string)
+    
+    public_point = signing_key.get_verifying_key().pubkey.point
+
+    e = ecdsa.util.string_to_number(h)
+    r, s = ecdsa.util.sigdecode_string(ecdsa_signature, order)
+
+    # Okay, now we have to guess and check parameters for j and yp
+    found = False
+    for j in range(SECP256k1.h + 1):
+        x = r + j * order
+        alpha = ((x * x * x) + (curve.a() * x) + curve.b()) % curve.p()
+        beta = ecdsa.numbertheory.square_root_mod_prime(alpha, curve.p())
+        for yp in range(2):
+            if (beta - yp) % 2 == 0:
+                y = beta
+            else:
+                y = curve.p() - beta
+            R = ecdsa.ellipticcurve.Point(curve, x, y, order)
+            Q = ecdsa.numbertheory.inverse_mod(r, order) * (s * R + (-e % order) * G)
+            if Q == public_point:
+                found = True
+                break
+        if found:
+            break
+
+    recid = (2 * j) + yp
+    if compressed:
+        meta = chr(31 + recid)
+    else:
+        meta = chr(27 + recid)
+
+    return base64.b64encode(meta + ecdsa_signature)
+
 # PKCS#7 padding
 def pad(message, block_size):
     padded = message
@@ -339,16 +395,18 @@ def main():
     parser.add_argument('--get-address', dest='mode', action='store_const', const='get_address', help='Convert a private key to a bitcoin address. Provide private key in Wallet Import Format in standard input. DO NOT PUT YOUR PRIVATE KEY ON THE COMMAND LINE.')
     parser.add_argument('--get-public-key', dest='mode', action='store_const', const='get_public_key', help='Convert a private key to a public key. Provide private key in Wallet Import Format in standard input. DO NOT PUT YOUR PRIVATE KEY ON THE COMMAND LINE.')
     parser.add_argument('--generate-private-key', dest='mode', action='store_const', const='generate_private_key', help='Generate a random private key in Wallet Import Format.')
-    parser.add_argument('text', nargs='?', action='store', help='String to encrypt or decrypt. If not specified, standard input will be used.')
+    parser.add_argument('-v', '--verify', dest='mode', action='store_const', const='verify', help='Verify a message. Requires both -a and -s. Provide message in arguments or in standard input.')
+    parser.add_argument('-i', '--sign', dest='mode', action='store_const', const='sign', help='Sign a message. Provide private key in Wallet Import Format in standard input. DO NOT PUT YOUR PRIVATE KEY ON THE COMMAND LINE.')
+    parser.add_argument('text', nargs='?', action='store', help='String to encrypt, decrypt, sign or verify. If not specified, standard input will be used.')
 
     args = parser.parse_args()
 
-    if args.mode != 'encrypt' and args.mode != 'decrypt' and args.mode != 'get_address' and args.mode != 'get_public_key' and args.mode != 'generate_private_key':
+    if args.mode != 'encrypt' and args.mode != 'decrypt' and args.mode != 'get_address' and args.mode != 'get_public_key' and args.mode != 'generate_private_key' and args.mode != 'sign' and args.mode != 'verify':
         parser.print_help()
         return
 
     if args.mode == 'encrypt' and not args.address and not (args.signature and args.message) and not args.public_key:
-        sys.stderr.write("You must specify a bitcoin address (-a) or a message signed by a bitcoin address (-m, -s)!\n")
+        sys.stderr.write("You must specify a bitcoin address (-a), a public key (-p), or a message signed by a bitcoin address (-m, -s)!\n")
         return
 
     if args.mode == 'encrypt':
@@ -404,6 +462,34 @@ def main():
         print private_key_to_public_key(private_key).encode('hex')
     elif args.mode == 'generate_private_key':
         print secret_to_private_key(generate_secret(), True)
+    elif args.mode == 'verify':
+        if not args.address:
+            sys.stderr.write("You must provide a address to verify with -a!\n")
+            return
+
+        if not args.signature:
+            sys.stderr.write("You must provide a signature to verify with -s!\n")
+            return
+
+        if args.message:
+            message = args.message 
+        elif args.text:
+            message = args.text
+        else:
+            message = sys.stdin.read()
+
+        if verify(args.signature, message, args.address):
+            print "Verified!"
+        else:
+            print "VERIFICATION FAILED."
+    elif args.mode == 'sign':
+        if args.text:
+            private_key = sys.stdin.read()
+            text = args.text
+        else:
+            private_key = sys.stdin.readline()
+            text = sys.stdin.read()
+        print sign(private_key, text)
 
 if __name__ == "__main__":
     main()
