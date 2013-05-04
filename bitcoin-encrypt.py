@@ -1,4 +1,4 @@
-#!/usr/local/bin/python
+#!/usr/bin/python
 # Requires python-ecdsa and pycrypto
 
 import ecdsa
@@ -157,7 +157,7 @@ def private_key_to_secret(private_key):
     return secret
 
 def secret_to_private_key(secret, compressed):
-    encoded = chr(0x80) + ecdsa.util.number_to_string(secret, secret)
+    encoded = chr(0x80) + ecdsa.util.number_to_string(secret, SECP256k1.order)
     if compressed:
         encoded = encoded + chr(0x01)
     return B58().wrap(encoded)
