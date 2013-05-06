@@ -304,8 +304,6 @@ def sign(private_key, message):
 def pad(message, block_size):
     padded = message
     last_block = len(message) % block_size
-    if last_block == 0:
-        return padded
     to_pad = block_size - last_block
     for i in range(to_pad):
         padded = padded + chr(to_pad)
@@ -317,7 +315,7 @@ def unpad(message, block_size):
         return message
 
     to_pad = ord(message[length - 1])
-    if to_pad > (block_size - 1):
+    if to_pad > block_size:
         return message
 
     if length < to_pad:
